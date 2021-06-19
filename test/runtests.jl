@@ -3,5 +3,8 @@ using Test
 
 @testset "NetParam.jl" begin
     # Insert tests here
-end
+    print("test")
 
+
+
+end
