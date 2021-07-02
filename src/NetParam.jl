@@ -37,7 +37,7 @@ end
 struct NetworkData
     data::AbstractArray{ComplexF64,3}
     freq::AbstractArray{Float64,1}
-    paramType::Int32 # NetParameterType
+    # paramType::Int32 # NetParameterType - store everything as RI
     refImp::Float64
     noiseData::AbstractArray{Float64,2}
 end
@@ -187,6 +187,13 @@ function parse_options( optionstr::String )::DataOptions
 end
 
 """
+    parse_contained_lines
+
+    for devices with < 3 ports the parameters are all on a single line
+    break it down and return the corresponding frequency and matrix
+"""
+
+"""
     read_normal
 
     parse the data in lines from a normal touchstone file
@@ -199,6 +206,11 @@ function read_normal( portcount::Int32, lines::Vector{String} )::NetworkData
     format = MA
     ref_imp = 50
 
+    # empty frequency vector
+    frequencies = zeros( 0 )
+    # empty port data
+    params = zeros( portcount, portcount )
+
     for line in lines
         # eliminate comments
         line = lowercase( split( line, "!" )[begin] )
@@ -210,12 +222,24 @@ function read_normal( portcount::Int32, lines::Vector{String} )::NetworkData
             format = opts.format
             ref_imp = opts.impedance
         else
+            # not an options line, make sure it has content
+            if !isempty( line )
+    #             contents = split( line )
+                # TODO: optimize this
+                if portcount < 3
+                    (freq, mat) = parse_contained_line( line, portcount, format, freqmult )
 
+                    push!( frequencies, freq )
+                    params = cat( params, mat, dims=3 ) # TODO: this is slow
+                    # for one and two, all on one line
+                elseif portcount < 5
+                    # three and four, they get wrapped
+                elseif portcount >= 5
+                    # 5 and up, wrapped and wrapped
+                end
+            end
         end
-        contents = split( line )
 
-        if '#' == contents[1]
-            opts = parse_options( line )
 
 
     end
