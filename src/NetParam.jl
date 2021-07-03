@@ -37,8 +37,8 @@ end
 struct NetworkData
     data::AbstractArray{ComplexF64,3}
     freq::AbstractArray{Float64,1}
-    # paramType::Int32 # NetParameterType - store everything as RI
-    refImp::Float64
+    paramType::Int32 # NetParameterType
+    ref_imp::Float64
     noiseData::AbstractArray{Float64,2}
 end
 
@@ -62,11 +62,6 @@ end
 #
 # end
 
-function __init__()
-    print( "test" )
-    f = NetworkData( rand( 3, 3, 3 ), rand( 3 ), 2, 2.0, rand( 2, 2 ) )
-    print( f.data )
-end
 
 # GENERAL TOUCHSTONE SYNTAX RULES
 #  1. Touchstone files are case-insensitive
@@ -187,11 +182,88 @@ function parse_options( optionstr::String )::DataOptions
 end
 
 """
+    pair_to_complex
+
+    Convert a formatted pair into a complex representation
+"""
+function pair_to_complex( a::Float64, b::Float64, format::Int32 )
+    if MA == format
+        r = a * cos( deg2rad( b ) )
+        i = a * sin( deg2rad( b ) )
+        return Complex{Float64}( r, i )
+    elseif DB == format
+        # dB = 20*log10|magnitude|)
+        mag = 10^( a / 20 )
+        r = mag * cos( deg2rad( b ) )
+        i = mag * sin( deg2rad( b ) )
+        return Complex{Float64}( r, i )
+    elseif RI == format
+        return Complex{Float64}( r, i )
+    end
+end
+
+"""
     parse_contained_lines
 
     for devices with < 3 ports the parameters are all on a single line
     break it down and return the corresponding frequency and matrix
 """
+function parse_contained_line( line::String, portcount::Int32, format::Int32, freqmult::Float64 )
+    contents = split( line )
+    freq = parse( Float64, contents[1] ) * freqmult
+
+    pair1v1 = parse( FLoat64, contents[2] )
+    pair1v2 = parse( Float64, contents[3] )
+
+    s11 = pair_to_complex( pair1v1, pair1v2, format )
+
+    if 2 == portcount
+        pair2v1 = parse( Float64, contents[4] )
+        pair2v2 = parse( Float64, contents[5] )
+        pair3v1 = parse( Float64, contents[6] )
+        pair3v2 = parse( Float64, contents[7] )
+        pair4v1 = parse( Float64, contents[8] )
+        pair4v2 = parse( Float64, contents[9] )
+
+        s21 = pair_to_complex( pair2v1, pair2v2, format )
+        s12 = pair_to_complex( pair3v1, pair3v2, format )
+        s22 = pair_to_complex( pair4v1, pair4v2, format )
+
+        return ( freq, [ s11 s12; s21 s22 ] )
+    else
+        return ( freq, s11 )
+    end
+end
+
+"""
+    parse_extended_line
+"""
+function parse_extended_line( line::String, portcount::Int32, format::Int32, freqmult::Float64 )
+    contents = split( line )
+    freq = parse( Float64, contents[1] ) * freqmult
+
+    paircount = portcount * portcount
+    row = 1
+    col = 1
+
+    mat = zeros( portcount, portcount )
+
+    for idx = 1:2:paircount
+        v1 = contents[idx]
+        v2 = contents[idx + 1]
+
+        parameter = pair_to_complex( v1, v2, format )
+
+        mat[row, col] = parameter
+        col += 1
+        if col > portcount
+            col = 1
+            row += 1
+        end
+    end
+
+    return ( freq, mat )
+end
 
 """
     read_normal
@@ -211,6 +283,10 @@ function read_normal( portcount::Int32, lines::Vector{String} )::NetworkData
     # empty port data
     params = zeros( portcount, portcount )
 
+    longline = ""
+    linecnt = 0
+    totallines = Int64( ceil( portcount / 4 ) ) * portcount
+
     for line in lines
         # eliminate comments
         line = lowercase( split( line, "!" )[begin] )
@@ -224,7 +300,6 @@ function read_normal( portcount::Int32, lines::Vector{String} )::NetworkData
         else
             # not an options line, make sure it has content
             if !isempty( line )
-    #             contents = split( line )
                 # TODO: optimize this
                 if portcount < 3
                     (freq, mat) = parse_contained_line( line, portcount, format, freqmult )
@@ -232,18 +307,25 @@ function read_normal( portcount::Int32, lines::Vector{String} )::NetworkData
                     push!( frequencies, freq )
                     params = cat( params, mat, dims=3 ) # TODO: this is slow
                     # for one and two, all on one line
-                elseif portcount < 5
+                elseif portcount >= 3
                     # three and four, they get wrapped
-                elseif portcount >= 5
                     # 5 and up, wrapped and wrapped
+                    linecnt += 1
+                    longline = string( longline, line )
+
+                    if linecnt == totallines
+                        (freq, mat) = parse_extended_line( line, portcount, format, freqmult )
+                        push!( frequencies, freq )
+                        params = cat( params, mat, dims=3 ) # TODO: this is slow
+                        longline = ""
+                        linecnt = 0
+                    end
                 end
             end
         end
-
-
-
     end
 
+    return NetworkData( params, frequencies, paramtype, ref_imp, zeros( 0, 0 ) )
 end
 
 """
@@ -254,26 +336,27 @@ end
 function read_mixer( portcount::Int32, lines::Vector{String} )::NetworkData
     # TODO: implement this function
 
-    # Touchstone defaults
-    freqmult = 1
-    paramtype = Scattering
-    format = MA
-    ref_imp = 50
-    csvmode = false
-
-    for line in lines
-
-        if 'CSV' in line
-            csvmode = true
-        end
-
-        if csvmode
-        else
-            contents = split( line )
-        end
-
-
-    end
+    print( "NetParam.jl: ERR, mixer files not yet supported" )
+    # # Touchstone defaults
+    # freqmult = 1
+    # paramtype = Scattering
+    # format = MA
+    # ref_imp = 50
+    # csvmode = false
+    #
+    # for line in lines
+    #
+    #     if 'CSV' in line
+    #         csvmode = true
+    #     end
+    #
+    #     if csvmode
+    #     else
+    #         contents = split( line )
+    #     end
+    #
+    #
+    # end
 end
 
 """
@@ -308,6 +391,10 @@ end
 
 
 function write_touchstone( path::String, network_data::NetworkData )
+    # TODO: implement
+
+    print( "NetParam.jl: ERR, write_touchstone not yet implemented" )
+end
 
 
 end # module
