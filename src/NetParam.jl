@@ -287,6 +287,7 @@ end
     parse the data in lines from a normal touchstone file
 
     TODO: handle noise data
+    TODO: not very efficient due to the means of constructing the matrix
 """
 function read_normal( portcount::Int32, lines::Vector{String} )::NetworkData
 
@@ -299,7 +300,11 @@ function read_normal( portcount::Int32, lines::Vector{String} )::NetworkData
     # empty frequency vector
     frequencies = zeros( 0 )
     # empty port data
-    params = zeros( portcount, portcount )
+    if portcount == 1
+        params = Vector{ComplexF64}()
+    else
+        params = Vector{AbstractMatrix{ComplexF64}}()
+    end
 
     longline = ""
     linecnt = 0
@@ -320,12 +325,12 @@ function read_normal( portcount::Int32, lines::Vector{String} )::NetworkData
             if !isempty( line )
                 # TODO: optimize this
                 if portcount < 3
+                    # for one and two, all on one line
                     (freq, mat) = parse_contained_line( line, portcount,
                                                         format, freqmult )
 
                     push!( frequencies, freq )
-                    params = cat( params, mat, dims=3 ) # TODO: this is slow
-                    # for one and two, all on one line
+                    push!( params, mat )
                 elseif portcount >= 3
                     # three and four, they get wrapped
                     # 5 and up, wrapped and wrapped
@@ -336,7 +341,7 @@ function read_normal( portcount::Int32, lines::Vector{String} )::NetworkData
                         (freq, mat) = parse_extended_line( longline, portcount,
                                                            format, freqmult )
                         push!( frequencies, freq )
-                        params = cat( params, mat, dims=3 ) # TODO: this is slow
+                        push!( params, mat )
                         longline = ""
                         linecnt = 0
                     end
@@ -345,7 +350,22 @@ function read_normal( portcount::Int32, lines::Vector{String} )::NetworkData
         end
     end
 
-    return NetworkData( params, frequencies, paramtype, ref_imp, zeros( 0, 0 ) )
+    # Convert from vector of 2d matrices to fixed 3d matrix
+    # TODO: clean things up for the 1x1 matrix
+    plen = length( params )
+    parameters = zeros( ComplexF64, portcount, portcount, plen )
+
+    if 1 == portcount
+        for idx = 1:plen
+            parameters[:,:,idx] = [ params[idx] ]
+        end
+    else
+        for idx = 1:plen
+            parameters[:,:, idx] = params[idx]
+        end
+    end
+
+    return NetworkData( parameters, frequencies, paramtype, ref_imp, zeros( 0, 0 ) )
 end
 
 """
