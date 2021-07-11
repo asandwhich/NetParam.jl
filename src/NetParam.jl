@@ -1,6 +1,7 @@
 module NetParam
 
 export NetParameterType
+export PairFormat
 export NetworkData
 export readTouchStone
 
@@ -37,7 +38,7 @@ end
 struct NetworkData
     data::AbstractArray{ComplexF64,3}
     freq::AbstractArray{Float64,1}
-    paramType::Int32 # NetParameterType
+    paramType::NetParameterType
     ref_imp::Float64
     noiseData::AbstractArray{Float64,2}
 end
@@ -47,21 +48,10 @@ end
 """
 struct DataOptions
     freqmult::Int64
-    paramtype::Int32
-    format::Int32
+    paramtype::NetParameterType
+    format::PairFormat
     impedance::Float64
 end
-
-#  # <freq unit> <parameter> <format> R <n>
-
-# function NetworkData( data::AbstractArray{ComplexF64,3},
-#                       freq::AbstractArray{Float64,1},
-#                       paramType::Int32,
-#                       refImp::Float64,
-#                       noiseData::AbstractArray{Float64,2} )
-#
-# end
-
 
 # GENERAL TOUCHSTONE SYNTAX RULES
 #  1. Touchstone files are case-insensitive
@@ -133,6 +123,9 @@ end
 
 """
     parse_options
+        (
+        optionstr::String
+        )
 
     Parse out file format properties from the touchstone option line
 """
@@ -145,7 +138,7 @@ function parse_options( optionstr::String )::DataOptions
 
     options = split( optionstr )
 
-    for option in options
+    for prop in options
         if "ghz" == prop
             freqmult = 1e9
         elseif "mhz" == prop
@@ -183,10 +176,15 @@ end
 
 """
     pair_to_complex
+        (
+        a::Float64,
+        b::Float64,
+        format::PairFormat
+        )
 
     Convert a formatted pair into a complex representation
 """
-function pair_to_complex( a::Float64, b::Float64, format::Int32 )
+function pair_to_complex( a::Float64, b::Float64, format::PairFormat )
     if MA == format
         r = a * cos( deg2rad( b ) )
         i = a * sin( deg2rad( b ) )
@@ -198,21 +196,28 @@ function pair_to_complex( a::Float64, b::Float64, format::Int32 )
         i = mag * sin( deg2rad( b ) )
         return Complex{Float64}( r, i )
     elseif RI == format
-        return Complex{Float64}( r, i )
+        return Complex{Float64}( a, b )
     end
 end
 
 """
     parse_contained_lines
+        (
+        line::String,
+        portcount::Int32,
+        format::PairFormat,
+        freqmult::Int64
+        )
 
     for devices with < 3 ports the parameters are all on a single line
     break it down and return the corresponding frequency and matrix
 """
-function parse_contained_line( line::String, portcount::Int32, format::Int32, freqmult::Float64 )
+function parse_contained_line( line::String, portcount::Int32,
+                               format::PairFormat, freqmult::Int64 )
     contents = split( line )
     freq = parse( Float64, contents[1] ) * freqmult
 
-    pair1v1 = parse( FLoat64, contents[2] )
+    pair1v1 = parse( Float64, contents[2] )
     pair1v2 = parse( Float64, contents[3] )
 
     s11 = pair_to_complex( pair1v1, pair1v2, format )
@@ -237,8 +242,15 @@ end
 
 """
     parse_extended_line
+        (
+        line::String,
+        portcount::Int32,
+        format::PairFormat,
+        freqmult::Float64
+        )
 """
-function parse_extended_line( line::String, portcount::Int32, format::Int32, freqmult::Float64 )
+function parse_extended_line( line::String, portcount::Int32,
+                              format::PairFormat, freqmult::Int64 )
     contents = split( line )
     freq = parse( Float64, contents[1] ) * freqmult
 
@@ -246,11 +258,11 @@ function parse_extended_line( line::String, portcount::Int32, format::Int32, fre
     row = 1
     col = 1
 
-    mat = zeros( portcount, portcount )
+    mat = zeros( Complex{Float64}, portcount, portcount )
 
     for idx = 1:2:paircount
-        v1 = contents[idx]
-        v2 = contents[idx + 1]
+        v1 = parse( Float64, contents[idx] )
+        v2 = parse( Float64, contents[idx + 1] )
 
         parameter = pair_to_complex( v1, v2, format )
 
@@ -267,8 +279,14 @@ end
 
 """
     read_normal
+        (
+        portcount::Int32,
+        lines::Vector{String}
+        )
 
     parse the data in lines from a normal touchstone file
+
+    TODO: handle noise data
 """
 function read_normal( portcount::Int32, lines::Vector{String} )::NetworkData
 
@@ -302,7 +320,8 @@ function read_normal( portcount::Int32, lines::Vector{String} )::NetworkData
             if !isempty( line )
                 # TODO: optimize this
                 if portcount < 3
-                    (freq, mat) = parse_contained_line( line, portcount, format, freqmult )
+                    (freq, mat) = parse_contained_line( line, portcount,
+                                                        format, freqmult )
 
                     push!( frequencies, freq )
                     params = cat( params, mat, dims=3 ) # TODO: this is slow
@@ -311,10 +330,11 @@ function read_normal( portcount::Int32, lines::Vector{String} )::NetworkData
                     # three and four, they get wrapped
                     # 5 and up, wrapped and wrapped
                     linecnt += 1
-                    longline = string( longline, line )
+                    longline = string( longline, ' ', line )
 
                     if linecnt == totallines
-                        (freq, mat) = parse_extended_line( line, portcount, format, freqmult )
+                        (freq, mat) = parse_extended_line( longline, portcount,
+                                                           format, freqmult )
                         push!( frequencies, freq )
                         params = cat( params, mat, dims=3 ) # TODO: this is slow
                         longline = ""
@@ -330,13 +350,17 @@ end
 
 """
     read_mixer
+        (
+        portcount::Int32,
+        lines::Vector{String}
+        )
 
     parse data data in lines for touchstone mixer file
 """
 function read_mixer( portcount::Int32, lines::Vector{String} )::NetworkData
     # TODO: implement this function
 
-    print( "NetParam.jl: ERR, mixer files not yet supported" )
+    error( "mixer files not yet supported" )
     # # Touchstone defaults
     # freqmult = 1
     # paramtype = Scattering
@@ -360,40 +384,48 @@ function read_mixer( portcount::Int32, lines::Vector{String} )::NetworkData
 end
 
 """
-    read_touchstone( path::String )
+    read_touchstone
+        (
+        path::String
+        )
 
     Open and parse a file conforming to the Touchstone file format and
     return a corresponding NetworkData object.
 
     TODO: Check ANSI character encoding compliance
           Error checking is for chumps
+    TODO: don't try to handle mixer data in this function - create separate
+          datatype to handle mixer data
 """
 function read_touchstone( path::String )::NetworkData
     touchstone_file = open( path, "r" )
 
     if isfile( touchstone_file )
-        extension = split( path, '.' )[2]
+        extension = split( path, '.' )[end]
         # Offset frequency / mixer touchstones files designated
         # by appended x typically: '.sNpx'
-        ismixer = ( 'x' in ext )
-
-        lines = readlines( touchstone_file )
+        ismixer = ( 'x' in extension )
 
         if ismixer
-            portcount = parse( Int32, extension[2:end-2] )
-            return read_mixer( portcount, lines )
+            error( "mixer files not supported, use read_mixer() instead" )
         else
+            lines = readlines( touchstone_file )
             portcount = parse( Int32, extension[2:end-1] )
             return read_normal( portcount, lines )
         end
     end
 end
 
-
+"""
+    write_touchstone
+        (
+        path::String,
+        network_data::NetworkData
+        )
+"""
 function write_touchstone( path::String, network_data::NetworkData )
     # TODO: implement
-
-    print( "NetParam.jl: ERR, write_touchstone not yet implemented" )
+    error( "write_touchstone not yet implemented" )
 end
 
 
